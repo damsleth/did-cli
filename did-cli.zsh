@@ -365,9 +365,11 @@ cmd_report() {
     vars=$(echo "$vars" | jq --arg d "$norm_to" '. + { query: (.query // {} | . + { endDateTime: $d }) }')
   fi
   if [[ -n "$week" ]]; then
-    vars=$(echo "$vars" | jq --argjson w "$week" '. + { query: (.query // {} | . + { week: $w }) }')
-  fi
-  if [[ -n "$year" ]]; then
+    # Always pair week with a year to avoid matching across all years
+    : ${year:=$(current_year)}
+    vars=$(echo "$vars" | jq --argjson w "$week" --argjson y "$year" \
+      '. + { query: (.query // {} | . + { week: $w, year: $y }) }')
+  elif [[ -n "$year" ]]; then
     vars=$(echo "$vars" | jq --argjson y "$year" '. + { query: (.query // {} | . + { year: $y }) }')
   fi
 
