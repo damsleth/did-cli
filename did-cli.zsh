@@ -369,14 +369,15 @@ cmd_config() {
 
   if [[ -n "$url" ]]; then
     if [[ -f .env ]]; then
-      sed -i '' "s|^DID_URL=.*|DID_URL=$url|" .env
+      sed -i '' "s|^DID_URL=.*|DID_URL='$url'|" .env
     fi
     info_log "DID_URL set to $url"
   fi
 
   if [[ -n "$cookie" ]]; then
     if [[ -f .env ]]; then
-      sed -i '' "s|^DID_COOKIE=.*|DID_COOKIE=$cookie|" .env
+      # Use single quotes in .env to avoid shell expansion of special chars
+      sed -i '' "s|^DID_COOKIE=.*|DID_COOKIE='$cookie'|" .env
     fi
     info_log "DID_COOKIE updated"
   fi
