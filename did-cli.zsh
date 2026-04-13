@@ -213,7 +213,7 @@ cmd_status() {
 }
 
 cmd_report() {
-  local customer="" project="" from="" to="" week="" year="" pretty=0
+  local customer="" project="" from="" to="" week="" year="" pretty=0 employee=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -223,10 +223,21 @@ cmd_report() {
       --to)        to="$2"; shift 2 ;;
       --week)      week="$2"; shift 2 ;;
       --year)      year="$2"; shift 2 ;;
+      --employee)  employee="$2"; shift 2 ;;
       --pretty)    pretty=1; shift ;;
       *) error_log "Unknown flag: $1"; exit 1 ;;
     esac
   done
+
+  # Default to current user unless --employee is specified
+  if [[ -z "$employee" ]]; then
+    debug_log "Scoping to current user..."
+    local me
+    me=$(gql_request "status.graphql" '{}' | jq -r '.user.displayName')
+    employee="$me"
+  elif [[ "$employee" == "all" ]]; then
+    employee=""
+  fi
 
   # Validate customer/project names against available options
   if [[ -n "$customer" || -n "$project" ]]; then
@@ -283,6 +294,9 @@ cmd_report() {
   # Build variables JSON
   local vars='{}'
 
+  if [[ -n "$employee" ]]; then
+    vars=$(echo "$vars" | jq --arg e "$employee" '. + { query: (.query // {} | . + { employeeNames: [$e] }) }')
+  fi
   if [[ -n "$customer" ]]; then
     vars=$(echo "$vars" | jq --arg c "$customer" '. + { query: (.query // {} | . + { customerNames: [$c] }) }')
   fi
@@ -505,6 +519,8 @@ Commands:
 Report options:
   --customer <name>   Filter by customer name
   --project <name>    Filter by project name
+  --employee <name>   Filter by employee (default: current user)
+  --employee all      Show all employees
   --from <date>       Start date (YYYY-MM-DD or YYYY-MM)
   --to <date>         End date (YYYY-MM-DD or YYYY-MM)
   --week <number>     ISO week number
