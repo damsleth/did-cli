@@ -20,6 +20,7 @@ source .env
 # --- Defaults ---
 : ${debug:=0}
 : ${DID_URL:=did.crayonconsulting.no}
+: ${DID_USER_DISPLAY_NAME:=}
 
 # --- Logging ---
 debug_log() { [[ "$debug" -eq 1 ]] && print -P "%F{green}DEBUG: $1%f" >&2 }
@@ -85,6 +86,28 @@ gql_request() {
   fi
 
   echo "$body_response" | jq '.data'
+}
+
+# --- Current user (cached in .env) ---
+get_display_name() {
+  if [[ -n "$DID_USER_DISPLAY_NAME" ]]; then
+    echo "$DID_USER_DISPLAY_NAME"
+    return
+  fi
+  debug_log "Fetching display name (first time)..."
+  local name
+  name=$(gql_request "status.graphql" '{}' | jq -r '.user.displayName')
+  if [[ -n "$name" && "$name" != "null" ]]; then
+    DID_USER_DISPLAY_NAME="$name"
+    if [[ -f .env ]]; then
+      if grep -q '^DID_USER_DISPLAY_NAME=' .env; then
+        sed -i '' "s|^DID_USER_DISPLAY_NAME=.*|DID_USER_DISPLAY_NAME='$name'|" .env
+      else
+        echo "DID_USER_DISPLAY_NAME='$name'" >> .env
+      fi
+    fi
+  fi
+  echo "$name"
 }
 
 # --- Date helpers ---
@@ -231,10 +254,7 @@ cmd_report() {
 
   # Default to current user unless --employee is specified
   if [[ -z "$employee" ]]; then
-    debug_log "Scoping to current user..."
-    local me
-    me=$(gql_request "status.graphql" '{}' | jq -r '.user.displayName')
-    employee="$me"
+    employee=$(get_display_name)
   elif [[ "$employee" == "all" ]]; then
     employee=""
   fi
