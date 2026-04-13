@@ -117,6 +117,29 @@ current_month() { date +%m | sed 's/^0//' }
 first_of_month() { date +%Y-%m-01 }
 today() { date +%Y-%m-%d }
 
+# Resolve semantic week values (last, next, or numeric)
+# Sets both week and year to handle year boundaries
+resolve_week() {
+  local val="$1"
+  case "$val" in
+    last)
+      python3 -c "
+from datetime import datetime, timedelta
+d = datetime.now() - timedelta(weeks=1)
+print(f'{d.strftime(\"%V\").lstrip(\"0\")} {d.strftime(\"%G\")}')"
+      ;;
+    next)
+      python3 -c "
+from datetime import datetime, timedelta
+d = datetime.now() + timedelta(weeks=1)
+print(f'{d.strftime(\"%V\").lstrip(\"0\")} {d.strftime(\"%G\")}')"
+      ;;
+    *)
+      echo "$val"
+      ;;
+  esac
+}
+
 # Normalize start date: YYYY-MM -> YYYY-MM-01T00:00:00.000Z, YYYY-MM-DD -> +T00:00:00.000Z
 normalize_date() {
   local d="$1"
@@ -252,6 +275,14 @@ cmd_report() {
     esac
   done
 
+  # Resolve semantic week values
+  if [[ -n "$week" && ("$week" == "last" || "$week" == "next") ]]; then
+    local resolved
+    resolved=$(resolve_week "$week")
+    week="${resolved%% *}"
+    year="${resolved##* }"
+  fi
+
   # Default to current user unless --employee is specified
   if [[ -z "$employee" ]]; then
     employee=$(get_display_name)
@@ -366,10 +397,12 @@ cmd_submit() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --period)
-        if [[ "$2" == "current" ]]; then
-          week=$(current_week)
-          year=$(current_year)
-        fi
+        case "$2" in
+          current) week=$(current_week); year=$(current_year) ;;
+          last)    local r=$(resolve_week last); week="${r%% *}"; year="${r##* }" ;;
+          next)    local r=$(resolve_week next); week="${r%% *}"; year="${r##* }" ;;
+          *) error_log "Unknown period: $2. Use current, last, or next."; exit 1 ;;
+        esac
         shift 2 ;;
       --week)    week="$2"; shift 2 ;;
       --year)    year="$2"; shift 2 ;;
@@ -377,6 +410,14 @@ cmd_submit() {
       *) error_log "Unknown flag: $1"; exit 1 ;;
     esac
   done
+
+  # Resolve semantic week values
+  if [[ -n "$week" && ("$week" == "last" || "$week" == "next") ]]; then
+    local resolved
+    resolved=$(resolve_week "$week")
+    week="${resolved%% *}"
+    year="${resolved##* }"
+  fi
 
   : ${week:=$(current_week)}
   : ${year:=$(current_year)}
@@ -543,13 +584,13 @@ Report options:
   --employee all      Show all employees
   --from <date>       Start date (YYYY-MM-DD or YYYY-MM)
   --to <date>         End date (YYYY-MM-DD or YYYY-MM)
-  --week <number>     ISO week number
+  --week <n>          ISO week number, or: last, next
   --year <number>     Year (default: current)
   --pretty            Human-readable output (default: JSON)
 
 Submit options:
-  --period current    Submit the current open period
-  --week <number>     Specific week to submit
+  --period <value>    current, last, or next
+  --week <n>          ISO week number, or: last, next
   --year <number>     Year (default: current)
   --confirm           Skip interactive prompt
 
