@@ -94,24 +94,30 @@ current_month() { date +%m | sed 's/^0//' }
 first_of_month() { date +%Y-%m-01 }
 today() { date +%Y-%m-%d }
 
-# Normalize date input: YYYY-MM -> YYYY-MM-01, YYYY-MM-DD -> as-is
+# Normalize start date: YYYY-MM -> YYYY-MM-01T00:00:00.000Z, YYYY-MM-DD -> +T00:00:00.000Z
 normalize_date() {
   local d="$1"
   if [[ "$d" =~ ^[0-9]{4}-[0-9]{2}$ ]]; then
-    echo "${d}-01"
+    echo "${d}-01T00:00:00.000Z"
+  elif [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "${d}T00:00:00.000Z"
   else
     echo "$d"
   fi
 }
 
-# End-of-month for YYYY-MM input, otherwise return as-is
+# Normalize end date: YYYY-MM -> last day of month T23:59:59.999Z, YYYY-MM-DD -> +T23:59:59.999Z
 normalize_end_date() {
   local d="$1"
   if [[ "$d" =~ ^[0-9]{4}-[0-9]{2}$ ]]; then
     local year="${d:0:4}"
     local month="${d:5:2}"
-    date -j -f "%Y-%m-%d" "${year}-${month}-01" +%Y-%m-%d 2>/dev/null | \
-      xargs -I{} date -j -v+1m -v-1d -f "%Y-%m-%d" {} +%Y-%m-%d
+    local last_day
+    last_day=$(date -j -f "%Y-%m-%d" "${year}-${month}-01" +%Y-%m-%d 2>/dev/null | \
+      xargs -I{} date -j -v+1m -v-1d -f "%Y-%m-%d" {} +%Y-%m-%d)
+    echo "${last_day}T23:59:59.999Z"
+  elif [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "${d}T23:59:59.999Z"
   else
     echo "$d"
   fi
@@ -146,21 +152,63 @@ cmd_status() {
   local data
   data=$(gql_request "status.graphql" '{}')
 
+  # Also fetch current period
+  local week year start_date end_date tz_offset
+  week=$(current_week)
+  year=$(current_year)
+  start_date=$(python3 -c "from datetime import datetime; d = datetime.strptime(f'${year}-W${week}-1', '%G-W%V-%u'); print(d.strftime('%Y-%m-%d'))")
+  end_date=$(python3 -c "from datetime import datetime, timedelta; d = datetime.strptime(f'${year}-W${week}-1', '%G-W%V-%u') + timedelta(days=6); print(d.strftime('%Y-%m-%d'))")
+  tz_offset=$(python3 -c "import time; print(-time.timezone // 60 if time.daylight == 0 else -time.altzone // 60)")
+
+  local ts_vars
+  ts_vars=$(jq -n \
+    --arg sd "$start_date" \
+    --arg ed "$end_date" \
+    --argjson tz "$tz_offset" \
+    '{
+      query: { startDate: $sd, endDate: $ed },
+      options: { locale: "nb", dateFormat: "DD.MM.YYYY", tzOffset: $tz }
+    }')
+
+  local ts_data
+  ts_data=$(gql_request "timesheet.graphql" "$ts_vars")
+
+  local period
+  period=$(echo "$ts_data" | jq --argjson w "$week" '.periods[] | select(.week == $w)')
+
   if [[ "$pretty" -eq 1 ]]; then
-    local balance
+    local display_name balance
+    display_name=$(echo "$data" | jq -r '.user.displayName // "Unknown"')
     balance=$(echo "$data" | jq -r '.user.timebank.balance // "N/A"')
     local vacation_total vacation_used vacation_remaining
     vacation_total=$(echo "$data" | jq -r '.vacation.total // "N/A"')
     vacation_used=$(echo "$data" | jq -r '.vacation.used // "N/A"')
     vacation_remaining=$(echo "$data" | jq -r '.vacation.remaining // "N/A"')
-    local display_name
-    display_name=$(echo "$data" | jq -r '.user.displayName // "Unknown"')
+
+    # Current period info
+    local is_confirmed event_count total_hours period_start period_end
+    is_confirmed=$(echo "$period" | jq -r '.isConfirmed // false')
+    event_count=$(echo "$period" | jq '.events | length // 0')
+    total_hours=$(echo "$period" | jq '[.events[].duration] | add // 0')
+    period_start=$(echo "$period" | jq -r '.startDate // "?"')
+    period_end=$(echo "$period" | jq -r '.endDate // "?"')
+    local status_label
+    if [[ "$is_confirmed" == "true" ]]; then
+      status_label="%F{green}submitted%f"
+    else
+      status_label="%F{yellow}not submitted%f"
+    fi
 
     print -P "%F{white}Status for %F{cyan}$display_name%f" >&2
+    print -P "" >&2
+    print -P "%F{white}Current period (week $week): $status_label" >&2
+    print -P "%F{white}  $period_start to $period_end - $event_count events, ${total_hours}h%f" >&2
+    print -P "" >&2
     print -P "%F{white}Time bank balance: %F{cyan}${balance}h%f" >&2
     print -P "%F{white}Vacation: %F{cyan}${vacation_used}%f/%F{cyan}${vacation_total}%f days used, %F{cyan}${vacation_remaining}%f remaining" >&2
   else
-    echo "$data"
+    # Merge period data into JSON output
+    echo "$data" | jq --argjson period "${period:-null}" '. + { currentPeriod: $period }'
   fi
 }
 
@@ -209,8 +257,8 @@ cmd_report() {
   # Default date range if nothing specified: current month
   if [[ -z "$from" && -z "$to" && -z "$week" ]]; then
     local default_from default_to
-    default_from=$(first_of_month)
-    default_to=$(today)
+    default_from="$(first_of_month)T00:00:00.000Z"
+    default_to="$(today)T23:59:59.999Z"
     vars=$(echo "$vars" | jq --arg f "$default_from" --arg t "$default_to" \
       '. + { query: (.query // {} | . + { startDateTime: $f, endDateTime: $t }) }')
   fi
