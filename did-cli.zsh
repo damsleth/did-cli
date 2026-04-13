@@ -228,6 +228,58 @@ cmd_report() {
     esac
   done
 
+  # Validate customer/project names against available options
+  if [[ -n "$customer" || -n "$project" ]]; then
+    debug_log "Validating filter names..."
+    local filter_data
+    filter_data=$(gql_request "filter-options.graphql" '{}')
+
+    if [[ -n "$customer" ]]; then
+      local match
+      match=$(echo "$filter_data" | jq -r --arg c "$customer" \
+        '.filterOptions.customerNames[] | select(ascii_downcase == ($c | ascii_downcase))')
+      if [[ -z "$match" ]]; then
+        error_log "Customer '$customer' not found."
+        local suggestions
+        suggestions=$(echo "$filter_data" | jq -r --arg c "$customer" \
+          '[.filterOptions.customerNames[] | select(ascii_downcase | contains(($c | ascii_downcase)))] | join(", ")')
+        if [[ -n "$suggestions" ]]; then
+          info_log "Did you mean: $suggestions"
+        else
+          info_log "Available customers:"
+          echo "$filter_data" | jq -r '.filterOptions.customerNames[]' | while read -r name; do
+            info_log "  $name"
+          done
+        fi
+        exit 1
+      fi
+      # Use the exact name from the API (correct casing)
+      customer="$match"
+    fi
+
+    if [[ -n "$project" ]]; then
+      local match
+      match=$(echo "$filter_data" | jq -r --arg p "$project" \
+        '.filterOptions.projectNames[] | select(ascii_downcase == ($p | ascii_downcase))')
+      if [[ -z "$match" ]]; then
+        error_log "Project '$project' not found."
+        local suggestions
+        suggestions=$(echo "$filter_data" | jq -r --arg p "$project" \
+          '[.filterOptions.projectNames[] | select(ascii_downcase | contains(($p | ascii_downcase)))] | join(", ")')
+        if [[ -n "$suggestions" ]]; then
+          info_log "Did you mean: $suggestions"
+        else
+          info_log "Available projects:"
+          echo "$filter_data" | jq -r '.filterOptions.projectNames[]' | head -20 | while read -r name; do
+            info_log "  $name"
+          done
+        fi
+        exit 1
+      fi
+      project="$match"
+    fi
+  fi
+
   # Build variables JSON
   local vars='{}'
 
