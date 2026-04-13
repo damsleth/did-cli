@@ -170,6 +170,30 @@ normalize_end_date() {
 }
 
 # --- Pretty formatting ---
+
+# Format ISO date range as friendly string, e.g. "7-13. april" or "28. mars - 3. april"
+friendly_date_range() {
+  local start="$1" end="$2"
+  python3 -c "
+import locale, sys
+from datetime import datetime
+try:
+    locale.setlocale(locale.LC_TIME, 'nb_NO.UTF-8')
+except:
+    pass
+s = datetime.strptime('${start}'[:10], '%Y-%m-%d')
+e = datetime.strptime('${end}'[:10], '%Y-%m-%d')
+months_nb = {1:'januar',2:'februar',3:'mars',4:'april',5:'mai',6:'juni',
+             7:'juli',8:'august',9:'september',10:'oktober',11:'november',12:'desember'}
+sm = months_nb[s.month]
+em = months_nb[e.month]
+if s.month == e.month:
+    print(f'{s.day}-{e.day}. {sm}')
+else:
+    print(f'{s.day}. {sm} - {e.day}. {em}')
+"
+}
+
 format_hours() {
   jq -r '
     def pad(n): tostring | if length < n then . + (" " * (n - length)) else . end;
@@ -179,6 +203,48 @@ format_hours() {
     (.[] | "\(.customer.name | pad(20))\(.project.name | pad(20))\(.duration)"),
     "",
     "Total: \($total) hours"
+  '
+}
+
+# Day-grouped table for weekly reports
+format_hours_by_day() {
+  jq -r '
+    def pad(n): tostring | if length < n then . + (" " * (n - length)) else . end;
+    def dayname: split("T")[0] as $d |
+      if   $d[8:10] == "01" then "Mon"
+      elif $d[8:10] == "02" then "Tue"
+      else $d end;
+
+    # Strip .000Z from datetime for strptime compatibility
+    def clean_dt: split(".")[0];
+
+    # Norwegian day names by weekday number (1=Mon)
+    def weekday_name:
+      {"1":"Man","2":"Tir","3":"Ons","4":"Tor","5":"Fre","6":"Lør","0":"Søn"}[tostring] // "?";
+
+    # Group by date (YYYY-MM-DD from startDateTime)
+    group_by(.startDateTime[:10])
+    | sort_by(.[0].startDateTime)
+    | . as $days |
+
+    # Header
+    "Customer            Project                  Hours",
+    "---                 ---                      ---",
+
+    # Each day
+    ($days[] |
+      .[0].startDateTime[:10] as $date |
+      (map(.duration) | add // 0) as $day_total |
+
+      # Day header with weekday name
+      "\n\($date) (\(.[0].startDateTime | clean_dt | strptime("%Y-%m-%dT%H:%M:%S") | mktime | strftime("%u") | weekday_name))                              \($day_total)h",
+      (sort_by(.startDateTime) | .[] |
+        "  \(.customer.name | pad(18))\(.project.name | pad(25))\(.duration)h"
+      )
+    ),
+
+    # Grand total
+    "\n" + ([($days[][] | .duration)] | add // 0 | tostring) + "h total"
   '
 }
 
@@ -245,10 +311,13 @@ cmd_status() {
       status_label="%F{yellow}not submitted%f"
     fi
 
+    local friendly_range
+    friendly_range=$(friendly_date_range "$period_start" "$period_end")
+
     print -P "%F{white}Status for %F{cyan}$display_name%f" >&2
     print -P "" >&2
-    print -P "%F{white}Current period (week $week): $status_label" >&2
-    print -P "%F{white}  $period_start to $period_end - $event_count events, ${total_hours}h%f" >&2
+    print -P "%F{white}Current period (week $week, $friendly_range): $status_label" >&2
+    print -P "%F{white}  $event_count events, ${total_hours}h%f" >&2
     print -P "" >&2
     print -P "%F{white}Time bank balance: %F{cyan}${balance}h%f" >&2
     print -P "%F{white}Vacation: %F{cyan}${vacation_used}%f/%F{cyan}${vacation_total}%f days used, %F{cyan}${vacation_remaining}%f remaining" >&2
@@ -387,7 +456,11 @@ cmd_report() {
   data=$(gql_request "report.graphql" "$vars")
 
   if [[ "$pretty" -eq 1 ]]; then
-    echo "$data" | jq '.timeEntries' | format_hours
+    if [[ -n "$week" ]]; then
+      echo "$data" | jq '.timeEntries' | format_hours_by_day
+    else
+      echo "$data" | jq '.timeEntries' | format_hours
+    fi
   else
     echo "$data"
   fi
