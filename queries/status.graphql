@@ -1,0 +1,17 @@
+query Status {
+  user: currentUser {
+    id
+    displayName
+    mail
+    timebank {
+      balance
+      lastUpdated
+    }
+  }
+  vacation {
+    total
+    used
+    usedHours
+    remaining
+  }
+}

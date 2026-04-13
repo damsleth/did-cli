@@ -1,0 +1,30 @@
+query CustomReport($query: ReportsQuery, $sortAsc: Boolean) {
+  timeEntries: report(query: $query, sortAsc: $sortAsc, allowLarge: true) {
+    title
+    duration
+    startDateTime
+    endDateTime
+    week
+    month
+    year
+    customer {
+      key
+      name
+    }
+    project {
+      tag
+      name
+      parent {
+        tag
+        name
+      }
+    }
+    resource {
+      id
+    }
+    role {
+      name
+      hourlyRate
+    }
+  }
+}

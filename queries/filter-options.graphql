@@ -1,0 +1,9 @@
+query FilterOptions($query: ReportsQuery) {
+  filterOptions: reportFilterOptions(query: $query) {
+    projectNames
+    parentProjectNames
+    customerNames
+    partnerNames
+    employeeNames
+  }
+}
