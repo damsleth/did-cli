@@ -9,6 +9,9 @@ cd "$SCRIPT_DIR"
 : ${DID_URL:=did.crayonconsulting.no}
 : ${DID_USER_DISPLAY_NAME:=}
 : ${DID_DEFAULT_OUTPUT:=json}
+: ${DID_CUSTOMER_MAXLENGTH:=}
+: ${DID_PROJECT_MAXLENGTH:=}
+: ${DID_PRETTY_FORMAT:=}
 
 # --- Logging ---
 debug_log() { [[ "$debug" -eq 1 ]] && print -P "%F{green}DEBUG: $1%f" >&2 }
@@ -286,22 +289,38 @@ else:
 }
 
 format_hours() {
-  jq -r '
+  local cmax="${DID_CUSTOMER_MAXLENGTH:-0}" pmax="${DID_PROJECT_MAXLENGTH:-0}"
+
+  if [[ -n "$DID_PRETTY_FORMAT" ]]; then
+    format_hours_custom "$DID_PRETTY_FORMAT"
+    return
+  fi
+
+  jq -r --argjson cmax "$cmax" --argjson pmax "$pmax" '
     def pad(n): tostring | if length < n then . + (" " * (n - length)) else . end;
+    def trunc(n): tostring | if n > 0 then .[:n] | pad(n) else pad(30) end;
     (map(.duration) | add // 0) as $total |
-    "Customer            Project             Hours",
-    "---                 ---                 ---",
-    (.[] | "\(.customer.name | pad(20))\(.project.name | pad(20))\(.duration)"),
+    "Customer                      Project                       Hours",
+    "---                           ---                           ---",
+    (.[] | "\(.customer.name | trunc($cmax))\(.project.name | trunc($pmax))\(.duration)"),
     "",
-    "Total: \($total) hours"
+    "Total: \($total * 100 | round / 100) hours"
   '
 }
 
 # Day-grouped table for weekly reports
 format_hours_by_day() {
   local week_num="$1"
-  jq -r --argjson wk "${week_num:-0}" '
+  local cmax="${DID_CUSTOMER_MAXLENGTH:-0}" pmax="${DID_PROJECT_MAXLENGTH:-0}"
+
+  if [[ -n "$DID_PRETTY_FORMAT" ]]; then
+    format_hours_by_day_custom "$DID_PRETTY_FORMAT" "$week_num"
+    return
+  fi
+
+  jq -r --argjson wk "${week_num:-0}" --argjson cmax "$cmax" --argjson pmax "$pmax" '
     def pad(n): tostring | if length < n then . + (" " * (n - length)) else . end;
+    def trunc(n): tostring | if n > 0 then .[:n] | pad(n) else pad(30) end;
     def clean_dt: split(".")[0];
     def bold: "\u001b[1m" + . + "\u001b[0m";
 
@@ -311,14 +330,15 @@ format_hours_by_day() {
       {"01":"January","02":"February","03":"March","04":"April","05":"May","06":"June",
        "07":"July","08":"August","09":"September","10":"October","11":"November","12":"December"}[.] // "?";
 
-    def day_num: ltrimstr("0") | tonumber;
+    def day_num: if . == null then 0 else ltrimstr("0") | tonumber end;
 
-    group_by(.startDateTime[:10])
+    [.[] | select(.startDateTime != null)]
+    | group_by(.startDateTime[:10])
     | sort_by(.[0].startDateTime)
     | . as $days |
 
     # Week header
-    (if $wk > 0 then
+    (if ($wk > 0) and ($days | length > 0) then
       ($days | first | .[0].startDateTime[:10]) as $first |
       ($days | last | .[0].startDateTime[:10]) as $last |
       ($first[8:10] | day_num) as $fd |
@@ -327,25 +347,103 @@ format_hours_by_day() {
       ($last[5:7] | month_name) as $lm |
       (if $fm == $lm then "Week \($wk) (\($fd)-\($ld) \($fm))"
        else "Week \($wk) (\($fd) \($fm) - \($ld) \($lm))" end | bold)
+    elif $wk > 0 then ("Week \($wk)" | bold)
     else empty end),
     "",
 
     # Each day
     ($days[] |
-      (map(.duration) | add // 0) as $day_total |
+      (map(.duration // 0) | add // 0) as $day_total |
       .[0].startDateTime[:10] as $d |
       ($d[8:10] | day_num) as $dn |
       (.[0].startDateTime | clean_dt | strptime("%Y-%m-%dT%H:%M:%S") | mktime | strftime("%u") | weekday_full) as $wd |
 
       ("\($wd) \($dn) (\($day_total)h)" | bold),
       (sort_by(.startDateTime) | .[] |
-        "  \(.customer.name | pad(18))\(.project.name | pad(23))\(.duration)h"
+        "  \(.customer.name | trunc($cmax))\(.project.name | trunc($pmax))\(.duration // 0)h"
       ),
       ""
     ),
 
     # Grand total
-    ("Total: \([($days[][] | .duration)] | add // 0)h" | bold)
+    ("Total: \([($days[][] | .duration // 0)] | add // 0 | . * 100 | round / 100)h" | bold)
+  '
+}
+
+# Custom format: DID_PRETTY_FORMAT is a JSON array of [column_name, display_name, column_length] tuples
+# e.g. '[["customer.name","Customer",20],["project.name","Project",30],["duration","Hours",0]]'
+# column_name uses dot notation for nested fields (customer.name, project.name, etc.)
+format_hours_custom() {
+  local fmt="$1"
+  jq -r --argjson fmt "$fmt" '
+    def getfield(path):
+      path | split(".") | . as $parts |
+      if ($parts | length) == 1 then .[$parts[0]]
+      elif ($parts | length) == 2 then .[$parts[0]][$parts[1]]
+      else .[$parts[0]] end;
+    def pad(n): tostring | if length < n then . + (" " * (n - length)) else . end;
+    def trunc(n): tostring | if n > 0 then .[:n] | pad(n) else . end;
+    ($fmt | map(.[1] | trunc(.[2])) | join("")) as $header |
+    ($fmt | map("---" | trunc(.[2])) | join("")) as $sep |
+    (map(.duration) | add // 0) as $total |
+    $header, $sep,
+    (.[] as $row | [$fmt[] | . as [$col, $disp, $len] | $row | getfield($col) | trunc($len)] | join("")),
+    "",
+    "Total: \($total * 100 | round / 100) hours"
+  '
+}
+
+format_hours_by_day_custom() {
+  local fmt="$1" week_num="$2"
+  jq -r --argjson fmt "$fmt" --argjson wk "${week_num:-0}" '
+    def getfield(path):
+      path | split(".") | . as $parts |
+      if ($parts | length) == 1 then .[$parts[0]]
+      elif ($parts | length) == 2 then .[$parts[0]][$parts[1]]
+      else .[$parts[0]] end;
+    def pad(n): tostring | if length < n then . + (" " * (n - length)) else . end;
+    def trunc(n): tostring | if n > 0 then .[:n] | pad(n) else . end;
+    def clean_dt: split(".")[0];
+    def bold: "\u001b[1m" + . + "\u001b[0m";
+    def weekday_full:
+      {"1":"Monday","2":"Tuesday","3":"Wednesday","4":"Thursday","5":"Friday","6":"Saturday","0":"Sunday"}[tostring] // "?";
+    def month_name:
+      {"01":"January","02":"February","03":"March","04":"April","05":"May","06":"June",
+       "07":"July","08":"August","09":"September","10":"October","11":"November","12":"December"}[.] // "?";
+    def day_num: if . == null then 0 else ltrimstr("0") | tonumber end;
+
+    [.[] | select(.startDateTime != null)]
+    | group_by(.startDateTime[:10])
+    | sort_by(.[0].startDateTime)
+    | . as $days |
+
+    (if ($wk > 0) and ($days | length > 0) then
+      ($days | first | .[0].startDateTime[:10]) as $first |
+      ($days | last | .[0].startDateTime[:10]) as $last |
+      ($first[8:10] | day_num) as $fd |
+      ($last[8:10] | day_num) as $ld |
+      ($first[5:7] | month_name) as $fm |
+      ($last[5:7] | month_name) as $lm |
+      (if $fm == $lm then "Week \($wk) (\($fd)-\($ld) \($fm))"
+       else "Week \($wk) (\($fd) \($fm) - \($ld) \($lm))" end | bold)
+    elif $wk > 0 then ("Week \($wk)" | bold)
+    else empty end),
+    "",
+
+    ($days[] |
+      (map(.duration // 0) | add // 0) as $day_total |
+      .[0].startDateTime[:10] as $d |
+      ($d[8:10] | day_num) as $dn |
+      (.[0].startDateTime | clean_dt | strptime("%Y-%m-%dT%H:%M:%S") | mktime | strftime("%u") | weekday_full) as $wd |
+
+      ("\($wd) \($dn) (\($day_total)h)" | bold),
+      (sort_by(.startDateTime) | .[] as $row |
+        "  " + ([$fmt[] | . as [$col, $disp, $len] | $row | getfield($col) | trunc($len)] | join(""))
+      ),
+      ""
+    ),
+
+    ("Total: \([($days[][] | .duration // 0)] | add // 0 | . * 100 | round / 100)h" | bold)
   '
 }
 
@@ -605,7 +703,33 @@ cmd_report() {
   fi
 
   if [[ "$output" == "pretty" ]]; then
+    # For week queries, fetch period status
     if [[ -n "$week" ]]; then
+      local start_date end_date tz_offset week_bounds
+      if week_bounds=$(iso_week_bounds "$week" "${year:-$(current_year)}"); then
+        start_date="${week_bounds%%$'\n'*}"
+        end_date="${week_bounds##*$'\n'}"
+        tz_offset=$(current_tz_offset)
+        local ts_vars
+        ts_vars=$(jq -n \
+          --arg sd "$start_date" \
+          --arg ed "$end_date" \
+          --argjson tz "$tz_offset" \
+          '{
+            query: { startDate: $sd, endDate: $ed },
+            options: { locale: "nb", dateFormat: "DD.MM.YYYY", tzOffset: $tz }
+          }')
+        local ts_data period is_confirmed
+        if ts_data=$(gql_request "timesheet.graphql" "$ts_vars"); then
+          period=$(echo "$ts_data" | jq --argjson w "$week" '.periods[] | select(.week == $w)')
+          is_confirmed=$(echo "$period" | jq -r '.isConfirmed // false')
+          if [[ "$is_confirmed" == "true" ]]; then
+            print -P "%F{green}submitted%f" >&2
+          else
+            print -P "%F{yellow}not submitted%f" >&2
+          fi
+        fi
+      fi
       echo "$data" | jq '.timeEntries' | format_hours_by_day "$week"
     else
       echo "$data" | jq '.timeEntries' | format_hours
@@ -766,12 +890,16 @@ cmd_submit() {
 }
 
 cmd_config() {
-  local url="" cookie=""
+  local url="" cookie="" output="" customer_max="" project_max="" pretty_fmt="" has_setting=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --url)    require_flag_value "$@"; url="$2"; shift 2 ;;
-      --cookie) require_flag_value "$@"; cookie="$2"; shift 2 ;;
+      --url)              require_flag_value "$@"; url="$2"; shift 2 ;;
+      --cookie)           require_flag_value "$@"; cookie="$2"; shift 2 ;;
+      --output)           require_flag_value "$@"; output="$2"; shift 2 ;;
+      --customer-maxlength) require_flag_value "$@"; customer_max="$2"; shift 2 ;;
+      --project-maxlength)  require_flag_value "$@"; project_max="$2"; shift 2 ;;
+      --pretty-format)    require_flag_value "$@"; pretty_fmt="$2"; shift 2 ;;
       *) error_log "Unknown flag: $1"; exit 1 ;;
     esac
   done
@@ -780,22 +908,65 @@ cmd_config() {
     update_env_var "DID_URL" "$url"
     DID_URL="$url"
     info_log "DID_URL set to $url"
+    has_setting=1
   fi
 
   if [[ -n "$cookie" ]]; then
     update_env_var "DID_COOKIE" "$cookie"
     DID_COOKIE="$cookie"
     info_log "DID_COOKIE updated"
+    has_setting=1
   fi
 
-  if [[ -z "$url" && -z "$cookie" ]]; then
+  if [[ -n "$output" ]]; then
+    if [[ "$output" != "json" && "$output" != "pretty" ]]; then
+      error_log "Invalid output format: $output. Use 'json' or 'pretty'."
+      exit 1
+    fi
+    update_env_var "DID_DEFAULT_OUTPUT" "$output"
+    DID_DEFAULT_OUTPUT="$output"
+    info_log "DID_DEFAULT_OUTPUT set to $output"
+    has_setting=1
+  fi
+
+  if [[ -n "$customer_max" ]]; then
+    update_env_var "DID_CUSTOMER_MAXLENGTH" "$customer_max"
+    DID_CUSTOMER_MAXLENGTH="$customer_max"
+    info_log "DID_CUSTOMER_MAXLENGTH set to $customer_max"
+    has_setting=1
+  fi
+
+  if [[ -n "$project_max" ]]; then
+    update_env_var "DID_PROJECT_MAXLENGTH" "$project_max"
+    DID_PROJECT_MAXLENGTH="$project_max"
+    info_log "DID_PROJECT_MAXLENGTH set to $project_max"
+    has_setting=1
+  fi
+
+  if [[ -n "$pretty_fmt" ]]; then
+    # Validate JSON
+    if ! echo "$pretty_fmt" | jq empty 2>/dev/null; then
+      error_log "Invalid JSON for --pretty-format"
+      exit 1
+    fi
+    update_env_var "DID_PRETTY_FORMAT" "$pretty_fmt"
+    DID_PRETTY_FORMAT="$pretty_fmt"
+    info_log "DID_PRETTY_FORMAT updated"
+    has_setting=1
+  fi
+
+  if [[ "$has_setting" -eq 0 ]]; then
     info_log "Current config:"
     info_log "  DID_URL=$DID_URL"
+    info_log "  DID_DEFAULT_OUTPUT=${DID_DEFAULT_OUTPUT:-json}"
     if [[ -n "$DID_COOKIE" ]]; then
       info_log "  DID_COOKIE=$(echo "$DID_COOKIE" | cut -c1-20)..."
     else
       info_log "  DID_COOKIE=<not set>"
     fi
+    [[ -n "$DID_CUSTOMER_MAXLENGTH" ]] && info_log "  DID_CUSTOMER_MAXLENGTH=$DID_CUSTOMER_MAXLENGTH"
+    [[ -n "$DID_PROJECT_MAXLENGTH" ]] && info_log "  DID_PROJECT_MAXLENGTH=$DID_PROJECT_MAXLENGTH"
+    [[ -n "$DID_PRETTY_FORMAT" ]] && info_log "  DID_PRETTY_FORMAT=$DID_PRETTY_FORMAT"
   fi
 }
 
@@ -835,6 +1006,11 @@ Submit options:
 Config options:
   --url <hostname>    Set DID instance URL
   --cookie <value>    Set didapp session cookie
+  --output <format>   Set default output: json or pretty
+  --customer-maxlength <n>  Max display width for customer column
+  --project-maxlength <n>   Max display width for project column
+  --pretty-format <json>    Column spec: array of [column_name, display_name, width] tuples
+                            e.g. '[["customer.name","Customer",15],["project.name","Project",25],["duration","Hours",0]]'
 
 Examples:
   did-cli status --pretty
@@ -842,6 +1018,8 @@ Examples:
   did-cli report --week 15 --pretty
   did-cli submit --period current
   did-cli config --cookie "eyJ..."
+  did-cli config --output pretty
+  did-cli config --project-maxlength 25
 HELP
 }
 
