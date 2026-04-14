@@ -21,6 +21,7 @@ source .env
 : ${debug:=0}
 : ${DID_URL:=did.crayonconsulting.no}
 : ${DID_USER_DISPLAY_NAME:=}
+: ${DID_DEFAULT_OUTPUT:=json}
 
 # --- Logging ---
 debug_log() { [[ "$debug" -eq 1 ]] && print -P "%F{green}DEBUG: $1%f" >&2 }
@@ -258,17 +259,33 @@ format_hours_by_day() {
   '
 }
 
+# --- Output format ---
+# Returns "pretty" or "json" based on flags and config default
+resolve_output() {
+  local explicit="$1"
+  if [[ "$explicit" == "pretty" || "$explicit" == "json" ]]; then
+    echo "$explicit"
+  elif [[ "$DID_DEFAULT_OUTPUT" == "pretty" ]]; then
+    echo "pretty"
+  else
+    echo "json"
+  fi
+}
+
 # --- Subcommands ---
 
 cmd_status() {
-  local pretty=0
+  local output=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --pretty) pretty=1; shift ;;
+      --pretty) output="pretty"; shift ;;
+      --json)   output="json"; shift ;;
       *) error_log "Unknown flag: $1"; exit 1 ;;
     esac
   done
+
+  output=$(resolve_output "$output")
 
   info_log "Fetching status from $DID_URL..."
   local data
@@ -298,7 +315,7 @@ cmd_status() {
   local period
   period=$(echo "$ts_data" | jq --argjson w "$week" '.periods[] | select(.week == $w)')
 
-  if [[ "$pretty" -eq 1 ]]; then
+  if [[ "$output" == "pretty" ]]; then
     local display_name balance
     display_name=$(echo "$data" | jq -r '.user.displayName // "Unknown"')
     balance=$(echo "$data" | jq -r '.user.timebank.balance // "N/A"')
@@ -338,7 +355,7 @@ cmd_status() {
 }
 
 cmd_report() {
-  local customer="" project="" from="" to="" week="" year="" pretty=0 employee=""
+  local customer="" project="" from="" to="" week="" year="" output="" employee=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -357,7 +374,8 @@ cmd_report() {
           *) error_log "Unknown period: $2. Use current, last, or next."; exit 1 ;;
         esac
         shift 2 ;;
-      --pretty)    pretty=1; shift ;;
+      --pretty)    output="pretty"; shift ;;
+      --json)      output="json"; shift ;;
       *) error_log "Unknown flag: $1"; exit 1 ;;
     esac
   done
@@ -369,6 +387,8 @@ cmd_report() {
     week="${resolved%% *}"
     year="${resolved##* }"
   fi
+
+  output=$(resolve_output "$output")
 
   # Default to current user unless --employee is specified
   if [[ -z "$employee" ]]; then
@@ -473,7 +493,7 @@ cmd_report() {
   local data
   data=$(gql_request "report.graphql" "$vars")
 
-  if [[ "$pretty" -eq 1 ]]; then
+  if [[ "$output" == "pretty" ]]; then
     if [[ -n "$week" ]]; then
       echo "$data" | jq '.timeEntries' | format_hours_by_day "$week"
     else
@@ -680,7 +700,9 @@ Report options:
   --to <date>         End date (YYYY-MM-DD or YYYY-MM)
   --week <n>          ISO week number, or: last, next
   --year <number>     Year (default: current)
-  --pretty            Human-readable output (default: JSON)
+  --pretty            Human-readable output
+  --json              JSON output
+                      (default from DID_DEFAULT_OUTPUT in .env)
 
 Submit options:
   --period <value>    current, last, or next
