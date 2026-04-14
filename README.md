@@ -2,7 +2,7 @@
 
 Command-line interface for [did](https://github.com/puzzlepart/did)
 <p align="center">
-  <img alt="didcli" width=500 src="https://github.com/user-attachments/assets/d9c33e73-8115-4909-ab38-02cc5af0463f"/>
+  <img alt="didcli" width=450 src="https://github.com/user-attachments/assets/caaeb04a-887b-4d6e-afeb-7ac890842794"/>
 </p>  
 
 ## Setup
