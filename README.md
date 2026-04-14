@@ -48,6 +48,15 @@ did-cli submit --week 15 --year 2026   # submit specific week
 did-cli submit --period current --confirm  # skip prompt
 ```
 
+## AI Skill
+
+There's a `/did` skill for Claude Code (and Codex/Copilot) that wraps this CLI for interactive timesheet review and management. It compares did data against your calendar, surfaces issues (uncategorized events, missing hours, unsubmitted periods), and fixes them via `cal-cli`.
+
+Install from [SKILLS](https://github.com/damsleth/SKILLS):
+```bash
+./install-skill.sh --install did
+```
+
 ## Output
 
 Default output is JSON (for piping/scripting). Use `--pretty` for human-readable tables.
