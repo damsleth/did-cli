@@ -210,41 +210,46 @@ format_hours() {
 format_hours_by_day() {
   jq -r '
     def pad(n): tostring | if length < n then . + (" " * (n - length)) else . end;
-    def dayname: split("T")[0] as $d |
-      if   $d[8:10] == "01" then "Mon"
-      elif $d[8:10] == "02" then "Tue"
-      else $d end;
 
     # Strip .000Z from datetime for strptime compatibility
     def clean_dt: split(".")[0];
 
-    # Norwegian day names by weekday number (1=Mon)
+    # Norwegian day and month names
     def weekday_name:
       {"1":"Man","2":"Tir","3":"Ons","4":"Tor","5":"Fre","6":"Lør","0":"Søn"}[tostring] // "?";
+    def month_name:
+      {"01":"januar","02":"februar","03":"mars","04":"april","05":"mai","06":"juni",
+       "07":"juli","08":"august","09":"september","10":"oktober","11":"november","12":"desember"}[.] // "?";
+
+    # ANSI bold
+    def bold: "\u001b[1m" + . + "\u001b[0m";
+
+    # Format "7. april (Man)"
+    def friendly_date:
+      .[:10] as $d |
+      ($d[8:10] | ltrimstr("0")) as $day |
+      ($d[5:7] | month_name) as $mon |
+      (. | clean_dt | strptime("%Y-%m-%dT%H:%M:%S") | mktime | strftime("%u") | weekday_name) as $wd |
+      "\($day). \($mon) (\($wd))";
 
     # Group by date (YYYY-MM-DD from startDateTime)
     group_by(.startDateTime[:10])
     | sort_by(.[0].startDateTime)
     | . as $days |
 
-    # Header
-    "Customer            Project                  Hours",
-    "---                 ---                      ---",
-
     # Each day
     ($days[] |
-      .[0].startDateTime[:10] as $date |
       (map(.duration) | add // 0) as $day_total |
 
-      # Day header with weekday name
-      "\n\($date) (\(.[0].startDateTime | clean_dt | strptime("%Y-%m-%dT%H:%M:%S") | mktime | strftime("%u") | weekday_name))                              \($day_total)h",
+      # Bold day header with hours aligned to column 45
+      "\n" + (("\(.[0].startDateTime | friendly_date)" | pad(44)) + "\($day_total)h" | bold),
       (sort_by(.startDateTime) | .[] |
-        "  \(.customer.name | pad(18))\(.project.name | pad(25))\(.duration)h"
+        "  \(.customer.name | pad(18))\(.project.name | pad(23))\(.duration)h"
       )
     ),
 
     # Grand total
-    "\n" + ([($days[][] | .duration)] | add // 0 | tostring) + "h total"
+    "\n" + ("\("Total" | pad(44))\([($days[][] | .duration)] | add // 0)h" | bold)
   '
 }
 
