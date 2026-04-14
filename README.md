@@ -1,6 +1,6 @@
 # did-cli
 
-Command-line interface for [DID](https://did.example.com   # required: no default host) timesheet operations.
+Command-line interface for [did](https://did.example.com   # required: no default host).
 
 ## Setup
 
