@@ -1,8 +1,8 @@
 # did-cli
 
-Command-line interface for [did](https://github.com/puzzlepart/did).
+Command-line interface for [did](https://github.com/puzzlepart/did)
 <p align="center">
-![didcli1](https://github.com/user-attachments/assets/9bf9c6a9-767d-4cc6-afa5-64c19c030d4a)
+  <img alt="didcli" width=500 src="https://github.com/user-attachments/assets/d9c33e73-8115-4909-ab38-02cc5af0463f"/>
 </p>  
 
 ## Setup
