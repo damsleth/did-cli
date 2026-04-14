@@ -208,48 +208,53 @@ format_hours() {
 
 # Day-grouped table for weekly reports
 format_hours_by_day() {
-  jq -r '
+  local week_num="$1"
+  jq -r --argjson wk "${week_num:-0}" '
     def pad(n): tostring | if length < n then . + (" " * (n - length)) else . end;
-
-    # Strip .000Z from datetime for strptime compatibility
     def clean_dt: split(".")[0];
-
-    # Norwegian day and month names
-    def weekday_name:
-      {"1":"Man","2":"Tir","3":"Ons","4":"Tor","5":"Fre","6":"Lør","0":"Søn"}[tostring] // "?";
-    def month_name:
-      {"01":"januar","02":"februar","03":"mars","04":"april","05":"mai","06":"juni",
-       "07":"juli","08":"august","09":"september","10":"oktober","11":"november","12":"desember"}[.] // "?";
-
-    # ANSI bold
     def bold: "\u001b[1m" + . + "\u001b[0m";
 
-    # Format "7. april (Man)"
-    def friendly_date:
-      .[:10] as $d |
-      ($d[8:10] | ltrimstr("0")) as $day |
-      ($d[5:7] | month_name) as $mon |
-      (. | clean_dt | strptime("%Y-%m-%dT%H:%M:%S") | mktime | strftime("%u") | weekday_name) as $wd |
-      "\($day). \($mon) (\($wd))";
+    def weekday_full:
+      {"1":"Monday","2":"Tuesday","3":"Wednesday","4":"Thursday","5":"Friday","6":"Saturday","0":"Sunday"}[tostring] // "?";
+    def month_name:
+      {"01":"January","02":"February","03":"March","04":"April","05":"May","06":"June",
+       "07":"July","08":"August","09":"September","10":"October","11":"November","12":"December"}[.] // "?";
 
-    # Group by date (YYYY-MM-DD from startDateTime)
+    def day_num: ltrimstr("0") | tonumber;
+
     group_by(.startDateTime[:10])
     | sort_by(.[0].startDateTime)
     | . as $days |
 
+    # Week header
+    (if $wk > 0 then
+      ($days | first | .[0].startDateTime[:10]) as $first |
+      ($days | last | .[0].startDateTime[:10]) as $last |
+      ($first[8:10] | day_num) as $fd |
+      ($last[8:10] | day_num) as $ld |
+      ($first[5:7] | month_name) as $fm |
+      ($last[5:7] | month_name) as $lm |
+      (if $fm == $lm then "Week \($wk) (\($fd)-\($ld) \($fm))"
+       else "Week \($wk) (\($fd) \($fm) - \($ld) \($lm))" end | bold)
+    else empty end),
+    "",
+
     # Each day
     ($days[] |
       (map(.duration) | add // 0) as $day_total |
+      .[0].startDateTime[:10] as $d |
+      ($d[8:10] | day_num) as $dn |
+      (.[0].startDateTime | clean_dt | strptime("%Y-%m-%dT%H:%M:%S") | mktime | strftime("%u") | weekday_full) as $wd |
 
-      # Bold day header with hours aligned to column 45
-      "\n" + (("\(.[0].startDateTime | friendly_date)" | pad(44)) + "\($day_total)h" | bold),
+      ("\($wd) \($dn) (\($day_total)h)" | bold),
       (sort_by(.startDateTime) | .[] |
         "  \(.customer.name | pad(18))\(.project.name | pad(23))\(.duration)h"
-      )
+      ),
+      ""
     ),
 
     # Grand total
-    "\n" + ("\("Total" | pad(44))\([($days[][] | .duration)] | add // 0)h" | bold)
+    ("Total: \([($days[][] | .duration)] | add // 0)h" | bold)
   '
 }
 
@@ -470,7 +475,7 @@ cmd_report() {
 
   if [[ "$pretty" -eq 1 ]]; then
     if [[ -n "$week" ]]; then
-      echo "$data" | jq '.timeEntries' | format_hours_by_day
+      echo "$data" | jq '.timeEntries' | format_hours_by_day "$week"
     else
       echo "$data" | jq '.timeEntries' | format_hours
     fi
