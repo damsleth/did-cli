@@ -1,6 +1,9 @@
 # did-cli
 
-Command-line interface for [did](https://did.crayonconsulting.no).
+Command-line interface for [did](https://github.com/puzzlepart/did).
+<p align="center">
+![didcli1](https://github.com/user-attachments/assets/9bf9c6a9-767d-4cc6-afa5-64c19c030d4a)
+</p>  
 
 ## Setup
 
