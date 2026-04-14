@@ -339,6 +339,14 @@ cmd_report() {
       --week)      week="$2"; shift 2 ;;
       --year)      year="$2"; shift 2 ;;
       --employee)  employee="$2"; shift 2 ;;
+      --period)
+        case "$2" in
+          current) week=$(current_week); year=$(current_year) ;;
+          last)    local r=$(resolve_week last); week="${r%% *}"; year="${r##* }" ;;
+          next)    local r=$(resolve_week next); week="${r%% *}"; year="${r##* }" ;;
+          *) error_log "Unknown period: $2. Use current, last, or next."; exit 1 ;;
+        esac
+        shift 2 ;;
       --pretty)    pretty=1; shift ;;
       *) error_log "Unknown flag: $1"; exit 1 ;;
     esac
@@ -657,6 +665,7 @@ Report options:
   --project <name>    Filter by project name
   --employee <name>   Filter by employee (default: current user)
   --employee all      Show all employees
+  --period <value>    current, last, or next (week)
   --from <date>       Start date (YYYY-MM-DD or YYYY-MM)
   --to <date>         End date (YYYY-MM-DD or YYYY-MM)
   --week <n>          ISO week number, or: last, next
