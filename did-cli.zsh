@@ -4,19 +4,6 @@
 SCRIPT_DIR="${0:A:h}"
 cd "$SCRIPT_DIR"
 
-# --- .env loading ---
-if [ ! -f .env ]; then
-  if [ -f .env.sample ]; then
-    if cp .env.sample .env 2>/dev/null; then
-      print -P "%F{yellow}Created .env from .env.sample. Set DID_COOKIE then re-run.%f" >&2
-      exit 2
-    fi
-  fi
-  print -P "%F{red}ERROR: .env not found. Copy .env.sample to .env and configure it.%f" >&2
-  exit 1
-fi
-source .env
-
 # --- Defaults ---
 : ${debug:=0}
 : ${DID_URL:=did.crayonconsulting.no}
@@ -28,6 +15,33 @@ debug_log() { [[ "$debug" -eq 1 ]] && print -P "%F{green}DEBUG: $1%f" >&2 }
 error_log() { print -P "%F{red}ERROR: $1%f" >&2 }
 info_log()  { print -P "%F{cyan}$1%f" >&2 }
 
+# --- .env loading ---
+ensure_env_file() {
+  if [[ -f .env ]]; then
+    return 0
+  fi
+
+  if [[ -f .env.sample ]]; then
+    if cp .env.sample .env 2>/dev/null; then
+      info_log "Created .env from .env.sample."
+      return 0
+    fi
+  fi
+
+  error_log ".env not found. Copy .env.sample to .env and configure it."
+  exit 1
+}
+
+load_env_file() {
+  ensure_env_file
+  if ! source .env; then
+    error_log "Failed to load .env. Fix invalid shell quoting and try again."
+    exit 1
+  fi
+}
+
+load_env_file
+
 # --- Dependency check ---
 check_dep() {
   if ! command -v "$1" &>/dev/null; then
@@ -37,18 +51,98 @@ check_dep() {
 }
 check_dep curl
 check_dep jq
+check_dep python3
 
-# --- Cookie validation ---
-if [[ -z "$DID_COOKIE" ]]; then
-  error_log "DID_COOKIE not set. Get the 'didapp' cookie from your browser and add it to .env"
-  exit 1
-fi
+# --- Shared helpers ---
+require_cookie() {
+  if [[ -z "$DID_COOKIE" ]]; then
+    error_log "DID_COOKIE not set. Configure it with: did-cli config --cookie <value>"
+    exit 1
+  fi
+}
+
+require_flag_value() {
+  local flag="$1"
+
+  if (( $# < 2 )) || [[ -z "${2-}" ]] || [[ "${2-}" == --* ]]; then
+    error_log "Missing value for $flag"
+    exit 1
+  fi
+}
+
+validate_week() {
+  local week="$1"
+
+  if [[ ! "$week" =~ ^[0-9]+$ ]] || (( week < 1 || week > 53 )); then
+    error_log "Invalid week '$week'. Use an ISO week number from 1 to 53."
+    exit 1
+  fi
+}
+
+validate_year() {
+  local year="$1"
+
+  if [[ ! "$year" =~ ^[0-9]{4}$ ]]; then
+    error_log "Invalid year '$year'. Use a four-digit year."
+    exit 1
+  fi
+}
+
+current_tz_offset() {
+  python3 - <<'PY'
+import time
+
+print(-time.timezone // 60 if time.daylight == 0 else -time.altzone // 60)
+PY
+}
+
+iso_week_bounds() {
+  local week="$1" year="$2"
+
+  DID_WEEK="$week" DID_YEAR="$year" python3 - <<'PY'
+import os
+import sys
+from datetime import datetime, timedelta
+
+week = int(os.environ["DID_WEEK"])
+year = int(os.environ["DID_YEAR"])
+
+try:
+    start = datetime.strptime(f"{year}-W{week:02d}-1", "%G-W%V-%u")
+except ValueError:
+    print(f"Invalid ISO week/year combination: week {week}, year {year}", file=sys.stderr)
+    raise SystemExit(1)
+
+print(start.strftime("%Y-%m-%d"))
+print((start + timedelta(days=6)).strftime("%Y-%m-%d"))
+PY
+}
+
+update_env_var() {
+  local key="$1" value="$2" tmp quoted
+
+  quoted=$(printf '%q' "$value")
+  tmp=$(mktemp "${TMPDIR:-/tmp}/did-cli.XXXXXX") || {
+    error_log "Unable to create a temporary file while updating .env"
+    exit 1
+  }
+
+  if [[ -f .env ]]; then
+    grep -v "^${key}=" .env > "$tmp" || true
+  else
+    : > "$tmp"
+  fi
+
+  printf '%s=%s\n' "$key" "$quoted" >> "$tmp"
+  mv "$tmp" .env
+}
 
 # --- GraphQL helper ---
 gql_request() {
   local query_file="$1"
   local variables="$2"
   local query
+  require_cookie
   query=$(<"$SCRIPT_DIR/queries/$query_file")
 
   local body
@@ -70,20 +164,20 @@ gql_request() {
 
   if [[ "$http_code" == "401" ]]; then
     error_log "Session expired (401). Update your cookie: did-cli config --cookie <value>"
-    exit 1
+    return 1
   fi
 
   if [[ "$http_code" != "200" ]]; then
     error_log "HTTP $http_code from did API"
     debug_log "$body_response"
-    exit 1
+    return 1
   fi
 
   local gql_errors
   gql_errors=$(echo "$body_response" | jq -r '.errors // empty')
   if [[ -n "$gql_errors" ]]; then
     error_log "GraphQL error: $(echo "$body_response" | jq -r '.errors[0].message')"
-    exit 1
+    return 1
   fi
 
   echo "$body_response" | jq '.data'
@@ -97,16 +191,12 @@ get_display_name() {
   fi
   debug_log "Fetching display name (first time)..."
   local name
-  name=$(gql_request "status.graphql" '{}' | jq -r '.user.displayName')
+  if ! name=$(gql_request "status.graphql" '{}' | jq -r '.user.displayName'); then
+    return 1
+  fi
   if [[ -n "$name" && "$name" != "null" ]]; then
     DID_USER_DISPLAY_NAME="$name"
-    if [[ -f .env ]]; then
-      if grep -q '^DID_USER_DISPLAY_NAME=' .env; then
-        sed -i '' "s|^DID_USER_DISPLAY_NAME=.*|DID_USER_DISPLAY_NAME='$name'|" .env
-      else
-        echo "DID_USER_DISPLAY_NAME='$name'" >> .env
-      fi
-    fi
+    update_env_var "DID_USER_DISPLAY_NAME" "$name"
   fi
   echo "$name"
 }
@@ -289,15 +379,20 @@ cmd_status() {
 
   info_log "Fetching status from $DID_URL..."
   local data
-  data=$(gql_request "status.graphql" '{}')
+  if ! data=$(gql_request "status.graphql" '{}'); then
+    exit 1
+  fi
 
   # Also fetch current period
-  local week year start_date end_date tz_offset
+  local week year start_date end_date tz_offset week_bounds
   week=$(current_week)
   year=$(current_year)
-  start_date=$(python3 -c "from datetime import datetime; d = datetime.strptime(f'${year}-W${week}-1', '%G-W%V-%u'); print(d.strftime('%Y-%m-%d'))")
-  end_date=$(python3 -c "from datetime import datetime, timedelta; d = datetime.strptime(f'${year}-W${week}-1', '%G-W%V-%u') + timedelta(days=6); print(d.strftime('%Y-%m-%d'))")
-  tz_offset=$(python3 -c "import time; print(-time.timezone // 60 if time.daylight == 0 else -time.altzone // 60)")
+  if ! week_bounds=$(iso_week_bounds "$week" "$year"); then
+    exit 1
+  fi
+  start_date="${week_bounds%%$'\n'*}"
+  end_date="${week_bounds##*$'\n'}"
+  tz_offset=$(current_tz_offset)
 
   local ts_vars
   ts_vars=$(jq -n \
@@ -310,7 +405,9 @@ cmd_status() {
     }')
 
   local ts_data
-  ts_data=$(gql_request "timesheet.graphql" "$ts_vars")
+  if ! ts_data=$(gql_request "timesheet.graphql" "$ts_vars"); then
+    exit 1
+  fi
 
   local period
   period=$(echo "$ts_data" | jq --argjson w "$week" '.periods[] | select(.week == $w)')
@@ -359,14 +456,15 @@ cmd_report() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --customer)  customer="$2"; shift 2 ;;
-      --project)   project="$2"; shift 2 ;;
-      --from)      from="$2"; shift 2 ;;
-      --to)        to="$2"; shift 2 ;;
-      --week)      week="$2"; shift 2 ;;
-      --year)      year="$2"; shift 2 ;;
-      --employee)  employee="$2"; shift 2 ;;
+      --customer)  require_flag_value "$@"; customer="$2"; shift 2 ;;
+      --project)   require_flag_value "$@"; project="$2"; shift 2 ;;
+      --from)      require_flag_value "$@"; from="$2"; shift 2 ;;
+      --to)        require_flag_value "$@"; to="$2"; shift 2 ;;
+      --week)      require_flag_value "$@"; week="$2"; shift 2 ;;
+      --year)      require_flag_value "$@"; year="$2"; shift 2 ;;
+      --employee)  require_flag_value "$@"; employee="$2"; shift 2 ;;
       --period)
+        require_flag_value "$@"
         case "$2" in
           current) week=$(current_week); year=$(current_year) ;;
           last)    local r=$(resolve_week last); week="${r%% *}"; year="${r##* }" ;;
@@ -388,11 +486,20 @@ cmd_report() {
     year="${resolved##* }"
   fi
 
+  if [[ -n "$week" ]]; then
+    validate_week "$week"
+  fi
+  if [[ -n "$year" ]]; then
+    validate_year "$year"
+  fi
+
   output=$(resolve_output "$output")
 
   # Default to current user unless --employee is specified
   if [[ -z "$employee" ]]; then
-    employee=$(get_display_name)
+    if ! employee=$(get_display_name); then
+      exit 1
+    fi
   elif [[ "$employee" == "all" ]]; then
     employee=""
   fi
@@ -401,7 +508,9 @@ cmd_report() {
   if [[ -n "$customer" || -n "$project" ]]; then
     debug_log "Validating filter names..."
     local filter_data
-    filter_data=$(gql_request "filter-options.graphql" '{}')
+    if ! filter_data=$(gql_request "filter-options.graphql" '{}'); then
+      exit 1
+    fi
 
     if [[ -n "$customer" ]]; then
       local match
@@ -491,7 +600,9 @@ cmd_report() {
 
   info_log "Querying hours from $DID_URL..."
   local data
-  data=$(gql_request "report.graphql" "$vars")
+  if ! data=$(gql_request "report.graphql" "$vars"); then
+    exit 1
+  fi
 
   if [[ "$output" == "pretty" ]]; then
     if [[ -n "$week" ]]; then
@@ -510,6 +621,7 @@ cmd_submit() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --period)
+        require_flag_value "$@"
         case "$2" in
           current) week=$(current_week); year=$(current_year) ;;
           last)    local r=$(resolve_week last); week="${r%% *}"; year="${r##* }" ;;
@@ -517,8 +629,8 @@ cmd_submit() {
           *) error_log "Unknown period: $2. Use current, last, or next."; exit 1 ;;
         esac
         shift 2 ;;
-      --week)    week="$2"; shift 2 ;;
-      --year)    year="$2"; shift 2 ;;
+      --week)    require_flag_value "$@"; week="$2"; shift 2 ;;
+      --year)    require_flag_value "$@"; year="$2"; shift 2 ;;
       --confirm) confirm=1; shift ;;
       *) error_log "Unknown flag: $1"; exit 1 ;;
     esac
@@ -534,17 +646,22 @@ cmd_submit() {
 
   : ${week:=$(current_week)}
   : ${year:=$(current_year)}
+  validate_week "$week"
+  validate_year "$year"
 
   # Calculate start/end dates for the ISO week
-  local start_date end_date
-  start_date=$(python3 -c "from datetime import datetime; d = datetime.strptime(f'${year}-W${week}-1', '%G-W%V-%u'); print(d.strftime('%Y-%m-%d'))")
-  end_date=$(python3 -c "from datetime import datetime, timedelta; d = datetime.strptime(f'${year}-W${week}-1', '%G-W%V-%u') + timedelta(days=6); print(d.strftime('%Y-%m-%d'))")
+  local start_date end_date week_bounds
+  if ! week_bounds=$(iso_week_bounds "$week" "$year"); then
+    exit 1
+  fi
+  start_date="${week_bounds%%$'\n'*}"
+  end_date="${week_bounds##*$'\n'}"
 
   debug_log "Fetching timesheet for week $week/$year ($start_date to $end_date)"
 
   # Get timezone offset in minutes
   local tz_offset
-  tz_offset=$(python3 -c "import time; print(-time.timezone // 60 if time.daylight == 0 else -time.altzone // 60)")
+  tz_offset=$(current_tz_offset)
 
   local ts_vars
   ts_vars=$(jq -n \
@@ -557,7 +674,9 @@ cmd_submit() {
     }')
 
   local ts_data
-  ts_data=$(gql_request "timesheet.graphql" "$ts_vars")
+  if ! ts_data=$(gql_request "timesheet.graphql" "$ts_vars"); then
+    exit 1
+  fi
 
   # Find the matching period
   local period
@@ -629,7 +748,9 @@ cmd_submit() {
     }')
 
   local result
-  result=$(gql_request "submit-period.graphql" "$submit_vars")
+  if ! result=$(gql_request "submit-period.graphql" "$submit_vars"); then
+    exit 1
+  fi
 
   local success
   success=$(echo "$result" | jq -r '.result.success')
@@ -649,31 +770,32 @@ cmd_config() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --url)    url="$2"; shift 2 ;;
-      --cookie) cookie="$2"; shift 2 ;;
+      --url)    require_flag_value "$@"; url="$2"; shift 2 ;;
+      --cookie) require_flag_value "$@"; cookie="$2"; shift 2 ;;
       *) error_log "Unknown flag: $1"; exit 1 ;;
     esac
   done
 
   if [[ -n "$url" ]]; then
-    if [[ -f .env ]]; then
-      sed -i '' "s|^DID_URL=.*|DID_URL='$url'|" .env
-    fi
+    update_env_var "DID_URL" "$url"
+    DID_URL="$url"
     info_log "DID_URL set to $url"
   fi
 
   if [[ -n "$cookie" ]]; then
-    if [[ -f .env ]]; then
-      # Use single quotes in .env to avoid shell expansion of special chars
-      sed -i '' "s|^DID_COOKIE=.*|DID_COOKIE='$cookie'|" .env
-    fi
+    update_env_var "DID_COOKIE" "$cookie"
+    DID_COOKIE="$cookie"
     info_log "DID_COOKIE updated"
   fi
 
   if [[ -z "$url" && -z "$cookie" ]]; then
     info_log "Current config:"
     info_log "  DID_URL=$DID_URL"
-    info_log "  DID_COOKIE=$(echo "$DID_COOKIE" | cut -c1-20)..."
+    if [[ -n "$DID_COOKIE" ]]; then
+      info_log "  DID_COOKIE=$(echo "$DID_COOKIE" | cut -c1-20)..."
+    else
+      info_log "  DID_COOKIE=<not set>"
+    fi
   fi
 }
 

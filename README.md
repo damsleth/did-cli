@@ -9,6 +9,8 @@ Command-line interface for [did](https://did.crayonconsulting.no).
 3. Get your `didapp` session cookie from the browser (DevTools > Application > Cookies)
 4. Configure: `did-cli config --cookie "your-cookie-value"`
 
+`did-cli` will create `.env` from `.env.sample` automatically on first run, so `did-cli help` and `did-cli config ...` work before the cookie is set.
+
 ### Configuration
 
 ```bash
@@ -53,3 +55,11 @@ Default output is JSON (for piping/scripting). Use `--pretty` for human-readable
 - curl
 - jq
 - python3 (for ISO week date calculation)
+
+## Smoke Tests
+
+Run the non-network regression checks with:
+
+```bash
+./tests/review-smoke.sh
+```
