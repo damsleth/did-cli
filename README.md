@@ -1,6 +1,6 @@
 # did-cli
 
-Command-line interface for [DID](https://did.crayonconsulting.no) timesheet operations.
+Command-line interface for [did](https://did.crayonconsulting.no).
 
 ## Setup
 

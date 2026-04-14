@@ -73,7 +73,7 @@ gql_request() {
   fi
 
   if [[ "$http_code" != "200" ]]; then
-    error_log "HTTP $http_code from DID API"
+    error_log "HTTP $http_code from did API"
     debug_log "$body_response"
     exit 1
   fi
@@ -659,7 +659,7 @@ cmd_config() {
 
 cmd_help() {
   cat >&2 <<'HELP'
-did-cli - Command-line interface for DID timesheet
+did-cli - Command-line interface for did
 
 Usage: did-cli <command> [options]
 
