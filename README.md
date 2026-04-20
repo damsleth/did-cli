@@ -10,6 +10,14 @@ Pure stdlib Python 3.8+. No runtime dependencies.
 
 ## Install
 
+### Homebrew (macOS / Linux)
+
+```sh
+brew install damsleth/tap/did-cli
+```
+
+### From source
+
 ```sh
 ./scripts/add-to-path.sh        # pipx install -e .
 # or: pipx install -e .
