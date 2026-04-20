@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "did-cli"
+version = "0.2.0"
+description = "Command-line interface for did (time tracking) via GraphQL"
+requires-python = ">=3.8"
+
+[project.scripts]
+did-cli = "did_cli:main"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools]
+packages = ["did_cli", "did_cli.queries"]
+
+[tool.setuptools.package-data]
+"did_cli.queries" = ["*.graphql"]

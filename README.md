@@ -1,77 +1,100 @@
 # did-cli
 
-Command-line interface for [did](https://github.com/puzzlepart/did)
+Command-line interface for [did](https://github.com/puzzlepart/did).
+
 <p align="center">
   <img alt="didcli" width=450 src="https://github.com/user-attachments/assets/caaeb04a-887b-4d6e-afeb-7ac890842794"/>
-</p>  
+</p>
 
-## Setup
+Pure stdlib Python 3.8+. No runtime dependencies.
 
-1. Clone this repo
-2. Run `./add-to-path.sh` to add `did-cli` to your PATH
-3. Get your `didapp` session cookie from the browser (DevTools > Application > Cookies)
-4. Configure: `did-cli config --cookie "your-cookie-value"`
+## Install
 
-`did-cli` will create `.env` from `.env.sample` automatically on first run, so `did-cli help` and `did-cli config ...` work before the cookie is set.
-
-### Configuration
-
-```bash
-did-cli config --url did.crayonconsulting.no  # set instance (default)
-did-cli config --cookie "eyJ..."              # set session cookie
-did-cli config                                # show current config
+```sh
+./scripts/add-to-path.sh        # pipx install -e .
+# or: pipx install -e .
 ```
+
+Then configure your session cookie once:
+
+```sh
+# DevTools > Application > Cookies > didapp
+did-cli config --cookie "eyJ..."
+```
+
+Config lives at `~/.config/did-cli/config` (mode 0600).
 
 ## Usage
 
 ### Check status
 
-```bash
+```sh
 did-cli status --pretty
 ```
 
-Shows time bank balance, vacation days, and user info.
+Shows the current period's submission state, time bank balance, and
+vacation days.
 
 ### Query hours
 
-```bash
+```sh
 did-cli report --customer "Crayon" --from 2026-01 --to 2026-03 --pretty
 did-cli report --project "Alpha" --week 15 --pretty
 did-cli report --from 2026-03 --pretty
+did-cli report --period last --pretty
 ```
+
+Default output is JSON (for piping). Use `--pretty` for
+human-readable tables.
 
 ### Submit hours
 
-```bash
-did-cli submit --period current        # submit current week
-did-cli submit --week 15 --year 2026   # submit specific week
-did-cli submit --period current --confirm  # skip prompt
+```sh
+did-cli submit --period current
+did-cli submit --week 15 --year 2026
+did-cli submit --period current --confirm    # skip prompt
 ```
 
-## AI Skill
+### Configure
 
-There's a `/did` skill for Claude Code (and Codex/Copilot) that wraps this CLI for interactive timesheet review and management. It compares did data against your calendar, surfaces issues (uncategorized events, missing hours, unsubmitted periods), and fixes them via `cal-cli`.
+```sh
+did-cli config --url did.crayonconsulting.no
+did-cli config --cookie "eyJ..."
+did-cli config --output pretty
+did-cli config --project-maxlength 25
+did-cli config                              # show current config
+```
 
-Install from [SKILLS](https://github.com/damsleth/SKILLS):
-```bash
+## Environment overrides
+
+Env vars override config-file values for the same key:
+
+- `DID_URL`, `DID_COOKIE`, `DID_DEFAULT_OUTPUT`
+- `DID_CUSTOMER_MAXLENGTH`, `DID_PROJECT_MAXLENGTH`, `DID_PRETTY_FORMAT`
+- `DID_DEBUG=1` enables debug logging on stderr
+
+## AI skill
+
+There's a `/did` skill for Claude Code / Codex / Copilot that wraps
+this CLI for interactive timesheet review. It compares did data
+against your calendar, surfaces issues, and fixes them via
+`cal-cli`. Install from [SKILLS](https://github.com/damsleth/SKILLS):
+
+```sh
 ./install-skill.sh --install did
 ```
 
-## Output
-
-Default output is JSON (for piping/scripting). Use `--pretty` for human-readable tables.
-
 ## Requirements
 
-- zsh
-- curl
-- jq
-- python3 (for ISO week date calculation)
+- Python 3.8+
+- A valid `didapp` session cookie
 
-## Smoke Tests
+## Tests
 
-Run the non-network regression checks with:
-
-```bash
-./tests/review-smoke.sh
+```sh
+pip install -e '.[test]'
+pytest -q
 ```
+
+See `SECURITY.md` for the threat model and `AGENTS.md` for the
+working style expected by AI agents contributing here.
