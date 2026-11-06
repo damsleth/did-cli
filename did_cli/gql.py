@@ -41,6 +41,10 @@ def gql_request(query_file, variables, url, cookie):
     `url` is the bare hostname (no scheme). `cookie` is the didapp
     session cookie value. Raises GqlError on HTTP/GraphQL error.
     """
+    if not url or url == 'did.example.com':
+        raise GqlError(
+            'DID_URL not set. Configure it with: did-cli config --url <your-did-host>'
+        )
     if not cookie:
         raise GqlError(
             'DID_COOKIE not set. Configure it with: did-cli config --cookie <value>'

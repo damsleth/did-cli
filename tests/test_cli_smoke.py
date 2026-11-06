@@ -87,7 +87,14 @@ def test_config_pretty_format_rejects_bad_json(monkeypatch, capsys, tmp_config,
     assert 'Invalid JSON' in capsys.readouterr().err
 
 
+def test_status_surfaces_missing_url(monkeypatch, capsys, tmp_config, clean_env):
+    rc = _run(monkeypatch, ['status'])
+    assert rc != 0
+    assert 'DID_URL' in capsys.readouterr().err
+
+
 def test_status_surfaces_missing_cookie(monkeypatch, capsys, tmp_config, clean_env):
+    monkeypatch.setenv('DID_URL', 'did.test.invalid')
     rc = _run(monkeypatch, ['status'])
     assert rc != 0
     assert 'DID_COOKIE' in capsys.readouterr().err
